@@ -148,17 +148,22 @@ def train():
         recall_str = " | ".join(f"{c}={v:.3f}" for c, v in recalls.items())
         print(f"Epoch {epoch+1:03d} | loss={avg_loss:.4f} | R@5: {recall_str} | mean={mean_recall:.3f}")
 
+        ckpt = {
+            "epoch":              epoch,
+            "model":              model.state_dict(),
+            "optimizer":          optimizer.state_dict(),
+            "train_losses":       train_losses,
+            "val_recalls_history": val_recalls_history,
+            "best_mean_recall":   best_mean_recall,
+            "args":               vars(args),
+        }
+        # Always save last checkpoint
+        torch.save(ckpt, os.path.join(args.ckpt_dir, "last.pt"))
+
         if mean_recall > best_mean_recall:
             best_mean_recall = mean_recall
-            torch.save({
-                "epoch":       epoch,
-                "model":       model.state_dict(),
-                "optimizer":   optimizer.state_dict(),
-                "train_losses":       train_losses,
-                "val_recalls_history": val_recalls_history,
-                "best_mean_recall":   best_mean_recall,
-                "args":        vars(args),
-            }, os.path.join(args.ckpt_dir, "best.pt"))
+            ckpt["best_mean_recall"] = best_mean_recall
+            torch.save(ckpt, os.path.join(args.ckpt_dir, "best.pt"))
             print(f"  → Saved best (mean R@5={best_mean_recall:.3f})")
 
     print(f"\nTraining done. Best mean R@5: {best_mean_recall:.3f}")
