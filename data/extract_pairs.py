@@ -74,6 +74,15 @@ def get_bpm(midi_path: str) -> float:
         return 120.0
 
 
+def _find_audio(stems_dir: str, stem_id: str) -> str:
+    """Return the audio path for a stem, checking .wav then .flac (Slakh2100 redux)."""
+    for ext in (".wav", ".flac"):
+        p = os.path.join(stems_dir, f"{stem_id}{ext}")
+        if os.path.exists(p):
+            return p
+    return os.path.join(stems_dir, f"{stem_id}.wav")   # fallback (will fail exists check)
+
+
 def _collect_tracks(data_root: str) -> list[tuple[str, str]]:
     """
     Return a sorted list of (track_name, track_dir) pairs from all SLAKH_SPLITS.
@@ -152,7 +161,7 @@ def extract_pairs(data_root: str, cache_dir: str,
             inst_class = info.get("inst_class", "")
             is_drum    = info.get("is_drum", False)
 
-            audio_path = os.path.join(stems_dir, f"{stem_id}.wav")
+            audio_path = _find_audio(stems_dir, stem_id)
             midi_path  = os.path.join(midi_dir,  f"{stem_id}.mid")
 
             # Accompaniment side
