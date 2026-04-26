@@ -21,7 +21,7 @@ def build_library(data_root: str, cache_dir: str, ckpt_path: str,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load model
-    ckpt  = torch.load(ckpt_path, map_location=device)
+    ckpt  = torch.load(ckpt_path, map_location=device, weights_only=False)
     args  = ckpt["args"]
     model = DualEncoder(hidden=args["hidden"], embed_dim=args["embed_dim"])
     model.load_state_dict(ckpt["model"])
