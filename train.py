@@ -35,6 +35,8 @@ def get_args():
     p.add_argument("--n_heads",     type=int,   default=4)
     p.add_argument("--n_layers",    type=int,   default=2)
     p.add_argument("--dropout",     type=float, default=0.1)
+    p.add_argument("--resume",      action="store_true",
+                   help="Resume from last.pt if it exists in ckpt_dir")
     return p.parse_args()
 
 
@@ -116,11 +118,27 @@ def train():
         optimizer, T_max=args.epochs, eta_min=1e-6
     )
 
-    best_mean_recall  = 0.0
-    train_losses      = []
-    val_recalls_hist  = []
+    best_mean_recall = 0.0
+    train_losses     = []
+    val_recalls_hist = []
+    start_epoch      = 0
 
-    for epoch in range(args.epochs):
+    # Resume from last checkpoint if requested and available
+    last_ckpt = os.path.join(args.ckpt_dir, "last.pt")
+    if args.resume and os.path.exists(last_ckpt):
+        ckpt = torch.load(last_ckpt, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        start_epoch      = ckpt["epoch"] + 1
+        train_losses     = ckpt.get("train_losses", [])
+        val_recalls_hist = ckpt.get("val_recalls_hist", [])
+        best_mean_recall = ckpt.get("best_mean_recall", 0.0)
+        # Advance scheduler to the correct step
+        for _ in range(start_epoch):
+            scheduler.step()
+        print(f"Resumed from epoch {start_epoch} (best mean R@5 so far: {best_mean_recall:.3f})")
+
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         epoch_loss = 0.0
         cat_losses = defaultdict(float)
