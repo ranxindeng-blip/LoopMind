@@ -96,8 +96,8 @@ def mix_selected(top1_paths: dict, melody_path: str,
     paths = [top1_paths[cat] for cat in CATEGORIES
              if flags[cat] and cat in top1_paths and top1_paths[cat]]
     # Always include the melody itself
-    if melody_path and os.path.exists(melody_path):
-        paths = [melody_path] + paths
+    if melody_path and os.path.exists(str(melody_path)):
+        paths = [str(melody_path)] + paths
     if not paths:
         return None
     try:
@@ -147,14 +147,15 @@ def launch(model: DualEncoder, library: dict, device=None, share: bool = True):
     model.eval()
 
     def process(midi_path: str):
+        # 2 + 4*3*2 + 1 = 27 outputs
         if not midi_path or not os.path.exists(midi_path):
-            return [None] * 29
+            return [None] * 27
 
-        roll      = piano_roll_image(midi_path)
+        roll       = piano_roll_image(midi_path)
         melody_aud = midi_to_audio_file(midi_path)
-        res       = retrieve_all(midi_path, model, library, device)
+        res        = retrieve_all(midi_path, model, library, device)
 
-        outs      = [roll, melody_aud]
+        outs       = [roll, melody_aud]
         top1_paths = {}
 
         for cat in CATEGORIES:
@@ -168,9 +169,7 @@ def launch(model: DualEncoder, library: dict, device=None, share: bool = True):
                 else:
                     outs += [None, ""]
 
-        # states for mix button
         outs.append(top1_paths)   # top1_state
-        outs.append(melody_aud)   # melody_state
         return outs
 
     with gr.Blocks(title="LoopMind") as demo:
@@ -180,8 +179,7 @@ def launch(model: DualEncoder, library: dict, device=None, share: bool = True):
 LoopMind retrieves compatible drums, bass, piano, and guitar stems.**
 ---""")
 
-        top1_state    = gr.State({})
-        melody_state  = gr.State(None)
+        top1_state = gr.State({})
 
         with gr.Row():
             # ── Left: input ───────────────────────────────────────────────────
@@ -224,12 +222,12 @@ LoopMind retrieves compatible drums, bass, piano, and guitar stems.**
         mix_out = gr.Audio(label="Mixed Arrangement", type="filepath")
 
         # ── Output list ───────────────────────────────────────────────────────
-        # [roll_img, melody_audio] + (audio+label)×3×4 + [top1_state, melody_state]
+        # [roll_img, melody_audio] + (audio+label)×3×4 + [top1_state] = 27
         all_outputs = [roll_img, melody_audio]
         for cat in CATEGORIES:
             for i in range(3):
                 all_outputs += [audio_cols[cat][i], label_cols[cat][i]]
-        all_outputs += [top1_state, melody_state]
+        all_outputs += [top1_state]
 
         # ── Wire events ───────────────────────────────────────────────────────
         for btn, preset_name in zip(preset_btns, PRESETS.keys()):
@@ -240,8 +238,9 @@ LoopMind retrieves compatible drums, bass, piano, and guitar stems.**
         upload.change(fn=lambda f: process(f.name if f else None),
                       inputs=upload, outputs=all_outputs)
 
+        # melody_audio (type="filepath") passes its current file path directly
         mix_btn.click(fn=mix_selected,
-                      inputs=[top1_state, melody_state,
+                      inputs=[top1_state, melody_audio,
                               cb_drums, cb_bass, cb_piano, cb_guitar],
                       outputs=mix_out)
 
