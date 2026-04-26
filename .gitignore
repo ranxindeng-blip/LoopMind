@@ -1,0 +1,23 @@
+# Data — too large for GitHub
+data/cache/
+data/babyslakh*/
+*.wav
+*.flac
+*.mp3
+*.npy
+*.pt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Temp
+/tmp/
