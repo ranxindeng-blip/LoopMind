@@ -89,10 +89,13 @@ def train():
     train_ds = SlakhPairDataset(records, features, split="train")
     val_ds   = SlakhPairDataset(records, features, split="val")
 
+    # collate_fn=list: disable auto-stacking since drums(256-d) != others(24-d)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
-                              shuffle=True,  drop_last=False)
+                              shuffle=True,  drop_last=False,
+                              collate_fn=list)
     val_loader   = DataLoader(val_ds,   batch_size=args.batch_size,
-                              shuffle=False, drop_last=False)
+                              shuffle=False, drop_last=False,
+                              collate_fn=list)
 
     # Model
     model     = DualEncoder(hidden=args.hidden, embed_dim=args.embed_dim).to(device)
