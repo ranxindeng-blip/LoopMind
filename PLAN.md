@@ -9,7 +9,7 @@
 
 **任务**: 跨模态检索——输入 MIDI 旋律，从音频库中检索风格兼容的伴奏 stem（鼓、贝斯、钢琴、吉他）  
 **核心方法**: 对比学习（InfoNCE Loss）训练双编码器，将 MIDI 和音频映射到共享嵌入空间  
-**数据集**: Slakh2100（~2100 tracks）  
+**数据集**: Slakh2100 子集（300–500 tracks，跑通后视情况扩展）  
 **Demo**: 已完成（BabySlakh 20 tracks + MLP，仅作展示用）  
 
 ---
@@ -89,7 +89,11 @@ slakh2100/train/Track00001/
 └── metadata.yaml ← 记录每个 stem 的乐器类型（plugin_name / inst_class）
 ```
 
-**旋律识别逻辑**: 非打击乐、非贝斯的 MIDI 轨中，平均音高最高的轨作为旋律  
+**旋律识别逻辑**:  
+1. 排除：drums、bass、平均音高低于 C3（MIDI 48）的轨  
+2. 剩余轨中取平均音高最高的轨作为旋律  
+（排除低音轨避免选到 string pad 或低音伴奏）  
+
 **类别映射**: `drums` / `bass` / `piano`（含 keys/organ） / `guitar`（含弦乐 texture）
 
 ---
@@ -239,24 +243,73 @@ features = extract_and_cache(
 
 ---
 
-## 九、开发顺序建议
+## 九、开发顺序建议（分阶段）
 
-- [ ] **Step 1** — 重构 `data/features.py`：改为输出时序 [T, 128] 而非 mean+std
-- [ ] **Step 2** — 重构 `data/dataset.py`：适配新特征格式 + Slakh2100 完整路径
-- [ ] **Step 3** — 重写 `models/dual_encoder.py`：CNN + Transformer 架构
-- [ ] **Step 4** — 更新 `train.py`：适配新 batch 格式（时序维度）
-- [ ] **Step 5** — Colab 跑特征提取（Cell 4，约 1 小时）
-- [ ] **Step 6** — Colab 跑训练（Cell 5，约 3 小时）
-- [ ] **Step 7** — 评估 + 调参（如有时间）
-- [ ] **Step 8** — build_library + demo 更新展示
+### Phase 1：子集 + drums/bass（先跑通）
+- [ ] **Step 1** — 重构 `data/extract_pairs.py`：加低音高阈值过滤；子集取 train 前 400 tracks
+- [ ] **Step 2** — 重构 `data/features.py`：改为输出时序 [T, 128] 而非 mean+std
+- [ ] **Step 3** — 重构 `data/dataset.py`：适配新特征格式
+- [ ] **Step 4** — 重写 `models/dual_encoder.py`：CNN + Transformer，4 类都训练，但每类别独立记录 loss
+- [ ] **Step 5** — 更新 `train.py`：打印 per-category loss，方便调试
+- [ ] **Step 6** — Colab 跑特征提取（子集 400 tracks，约 20-30 min）
+- [ ] **Step 7** — Colab 跑训练（约 1-2 小时）
+- [ ] **Step 8** — 评估 drums + bass 的 R@1/R@5
+
+### Phase 2：扩展（有时间再做）
+- [ ] **Step 9** — 验证 piano/guitar 指标
+- [ ] **Step 10** — 扩到全量或更大子集（800+ tracks）
+- [ ] **Step 11** — build_library + demo 展示polish
 
 ---
 
-## 十、与 Demo 版的对比
+## 十、BPM 对齐方案（重要）
+
+检索出来的 stem 来自不同 track，BPM 可能相差 20-30%。只做 onset 对齐能对上第一拍，之后会逐渐跑偏，导致混音难听。
+
+### 方案：查询时过滤 + mix 时 time-stretch
+
+**Step A：build_library 时记录每个 stem 的 BPM**
+
+Slakh2100 每个 track 的 MIDI 文件含有 tempo 信息，在 `build_library.py` 里额外存进 library：
+
+```python
+import pretty_midi
+pm = pretty_midi.PrettyMIDI(midi_path)
+tempos, _ = pm.get_tempo_changes()
+bpm = float(tempos[0]) if len(tempos) > 0 else 120.0
+library[cat]["bpms"].append(bpm)
+```
+
+**Step B：mix 时用 librosa 做 time-stretch 对齐 BPM**
+
+```python
+import librosa
+
+def stretch_to_bpm(audio_path: str, src_bpm: float, tgt_bpm: float) -> AudioSegment:
+    if abs(src_bpm - tgt_bpm) < 2:        # 差距小于 2BPM 不处理
+        return AudioSegment.from_file(audio_path)
+    rate = tgt_bpm / src_bpm
+    y, sr = librosa.load(audio_path, sr=None)
+    y_stretched = librosa.effects.time_stretch(y, rate=rate)
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    sf.write(tmp.name, y_stretched, sr)
+    return AudioSegment.from_file(tmp.name)
+```
+
+`mix_selected` 里先 time-stretch 每个 stem 到 query 的 BPM，再做 onset trim，再叠加。
+
+**注意事项**:
+- time_stretch 对鼓声效果一般（会有 artifact），BPM 差距大时建议只取 BPM 接近的 stem
+- 旋律 MIDI 的 BPM 可以从 `pretty_midi.get_tempo_changes()` 直接读出
+- library 里存的 BPM 是 stem 所在 track 的 BPM（与 stem 音频 1:1 对应）
+
+---
+
+## 十一、与 Demo 版的对比
 
 | 项目 | Demo 版（已完成）| 正式版 |
 |------|-----------------|--------|
-| 数据集 | BabySlakh（20 tracks）| Slakh2100（~2100 tracks）|
+| 数据集 | BabySlakh（20 tracks）| Slakh2100 子集（300–500 tracks，可扩展）|
 | 特征 | chroma mean+std [24-d] | piano roll / mel 序列 [T, 128] |
 | 模型 | MLP | CNN + Transformer |
 | embed_dim | 64 | 128 |
