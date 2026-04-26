@@ -6,6 +6,8 @@ data/babyslakh*/
 *.mp3
 *.npy
 *.pt
+# Keep preset MIDIs (small, needed for demo)
+!demo/presets/*.mid
 
 # Python
 __pycache__/
