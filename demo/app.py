@@ -1,6 +1,5 @@
 """
 Gradio demo — MIDI melody → compatible stems per category.
-
 Run location : browser Colab (share=True for public URL)
 """
 import os
@@ -9,7 +8,7 @@ import traceback
 import numpy as np
 import torch
 import pretty_midi
-import librosa
+import soundfile as sf
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -32,7 +31,23 @@ PRESETS = {
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Audio helpers ─────────────────────────────────────────────────────────────
+
+def midi_to_audio_file(midi_path: str, fs: int = 22050) -> str:
+    """Synthesize MIDI to WAV and return temp file path."""
+    try:
+        pm    = pretty_midi.PrettyMIDI(midi_path)
+        try:
+            audio = pm.fluidsynth(fs=fs)
+        except Exception:
+            audio = pm.synthesize(fs=fs)
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        sf.write(tmp.name, audio, fs)
+        return tmp.name
+    except Exception:
+        traceback.print_exc()
+        return None
+
 
 def piano_roll_image(midi_path: str) -> str:
     try:
@@ -59,13 +74,19 @@ def piano_roll_image(midi_path: str) -> str:
         return None
 
 
-def mix_stems(paths: list) -> str:
+def mix_selected(top1_paths: dict, use_drums: bool, use_bass: bool,
+                 use_piano: bool, use_guitar: bool) -> str:
+    """Mix only the checked categories."""
+    flags = {"drums": use_drums, "bass": use_bass,
+             "piano": use_piano, "guitar": use_guitar}
+    paths = [top1_paths[cat] for cat in CATEGORIES
+             if flags[cat] and cat in top1_paths and top1_paths[cat]]
+    if not paths:
+        return None
     try:
-        segments = [AudioSegment.from_file(p) for p in paths if p]
-        if not segments:
-            return None
-        min_len = min(len(s) for s in segments)
-        mixed   = segments[0][:min_len]
+        segments = [AudioSegment.from_file(p) for p in paths]
+        min_len  = min(len(s) for s in segments)
+        mixed    = segments[0][:min_len]
         for s in segments[1:]:
             mixed = mixed.overlay(s[:min_len])
         mixed = mixed.normalize()
@@ -83,13 +104,12 @@ def retrieve_all(midi_path: str, model, library: dict, device) -> dict:
         x    = torch.from_numpy(feat).unsqueeze(0).to(device)
         with torch.no_grad():
             embeddings = model.encode_query(x)
-
         results = {}
         for cat in CATEGORIES:
-            emb   = embeddings[cat].squeeze(0).cpu().numpy()
-            embs  = library[cat]["embeddings"]
-            paths = library[cat]["paths"]
-            tracks= library[cat]["tracks"]
+            emb    = embeddings[cat].squeeze(0).cpu().numpy()
+            embs   = library[cat]["embeddings"]
+            paths  = library[cat]["paths"]
+            tracks = library[cat]["tracks"]
             q_norm = emb / (np.linalg.norm(emb) + 1e-8)
             e_norm = embs / (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-8)
             scores = e_norm @ q_norm
@@ -110,29 +130,30 @@ def launch(model: DualEncoder, library: dict, device=None, share: bool = True):
 
     def process(midi_path: str):
         if not midi_path or not os.path.exists(midi_path):
-            return [None] * (1 + 4*6 + 1)
+            return [None] * 28
 
-        roll  = piano_roll_image(midi_path)
-        res   = retrieve_all(midi_path, model, library, device)
-        outs  = [roll]
-        top1_paths = []
+        roll      = piano_roll_image(midi_path)
+        melody_aud = midi_to_audio_file(midi_path)
+        res       = retrieve_all(midi_path, model, library, device)
+
+        outs      = [roll, melody_aud]
+        top1_paths = {}
 
         for cat in CATEGORIES:
             hits = res.get(cat, [])
             for i in range(3):
                 if i < len(hits):
                     path, score, track = hits[i]
-                    outs += [path, f"{CAT_EMOJI[cat]} {track} | score: {score:.3f}"]
+                    outs += [path, f"{CAT_EMOJI[cat]} {track}  |  score: {score:.3f}"]
                     if i == 0:
-                        top1_paths.append(path)
+                        top1_paths[cat] = path
                 else:
                     outs += [None, ""]
 
-        outs.append(mix_stems(top1_paths))
+        # top1_paths state (for selective mix)
+        outs.append(top1_paths)
         return outs
 
-    # All outputs: roll_img + (audio + label) × 3 × 4 cats + mix
-    # Total = 1 + 24 + 1 = 26
     with gr.Blocks(title="LoopMind") as demo:
         gr.Markdown("""
 # 🎵 LoopMind — MIDI Melody to Arrangement
@@ -140,15 +161,21 @@ def launch(model: DualEncoder, library: dict, device=None, share: bool = True):
 LoopMind retrieves compatible drums, bass, piano, and guitar stems.**
 ---""")
 
+        top1_state = gr.State({})
+
         with gr.Row():
+            # ── Left: input ───────────────────────────────────────────────────
             with gr.Column(scale=1):
                 gr.Markdown("### 🎹 Input Melody")
-                gr.Markdown("**Preset Melodies:**")
+                gr.Markdown("**Presets:**")
                 preset_btns = [gr.Button(name, size="sm") for name in PRESETS]
-                upload = gr.File(label="Upload your own MIDI",
-                                 file_types=[".mid", ".midi"])
-                roll_img = gr.Image(label="Piano Roll", height=200)
+                upload      = gr.File(label="Upload your own MIDI",
+                                      file_types=[".mid", ".midi"])
+                roll_img    = gr.Image(label="Piano Roll", height=180)
+                melody_audio = gr.Audio(label="▶ Listen to Melody",
+                                        type="filepath")
 
+            # ── Right: results ────────────────────────────────────────────────
             with gr.Column(scale=2):
                 gr.Markdown("### 🎼 Retrieved Stems")
                 audio_cols, label_cols = {}, {}
@@ -165,23 +192,36 @@ LoopMind retrieves compatible drums, bass, piano, and guitar stems.**
                                 label_cols[cat].append(lbl)
                                 audio_cols[cat].append(aud)
 
+        # ── Mix section ───────────────────────────────────────────────────────
         gr.Markdown("---")
-        gr.Markdown("### 🎧 Auto Mix  *(top-1 per category)*")
+        gr.Markdown("### 🎧 Mix — choose which stems to include")
+        with gr.Row():
+            cb_drums  = gr.Checkbox(label="🥁 Drums",          value=True)
+            cb_bass   = gr.Checkbox(label="🎸 Bass",           value=True)
+            cb_piano  = gr.Checkbox(label="🎹 Piano / Chords", value=True)
+            cb_guitar = gr.Checkbox(label="🎛 Guitar",         value=True)
+        mix_btn = gr.Button("🎚️ Mix Selected", variant="primary")
         mix_out = gr.Audio(label="Mixed Arrangement", type="filepath")
 
-        all_outputs = [roll_img]
+        # ── Output list ───────────────────────────────────────────────────────
+        # [roll_img, melody_audio] + (audio+label)×3×4 + [top1_state]
+        all_outputs = [roll_img, melody_audio]
         for cat in CATEGORIES:
             for i in range(3):
                 all_outputs += [audio_cols[cat][i], label_cols[cat][i]]
-        all_outputs.append(mix_out)
+        all_outputs.append(top1_state)
 
-        # Wire preset buttons
+        # ── Wire events ───────────────────────────────────────────────────────
         for btn, preset_name in zip(preset_btns, PRESETS.keys()):
             midi_path = os.path.join(PRESET_DIR, PRESETS[preset_name])
-            btn.click(fn=lambda p=midi_path: process(p), outputs=all_outputs)
+            btn.click(fn=lambda p=midi_path: process(p),
+                      outputs=all_outputs)
 
-        # Wire upload
         upload.change(fn=lambda f: process(f.name if f else None),
                       inputs=upload, outputs=all_outputs)
+
+        mix_btn.click(fn=mix_selected,
+                      inputs=[top1_state, cb_drums, cb_bass, cb_piano, cb_guitar],
+                      outputs=mix_out)
 
     demo.launch(share=share)
