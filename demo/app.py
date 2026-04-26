@@ -74,9 +74,22 @@ def piano_roll_image(midi_path: str) -> str:
         return None
 
 
+def trim_to_first_onset(audio_path: str) -> AudioSegment:
+    """Trim audio to start from the first detected onset (beat 1 alignment)."""
+    import librosa
+    y, sr = librosa.load(audio_path, sr=None, mono=True)
+    onsets = librosa.onset.onset_detect(y=y, sr=sr, units="samples",
+                                        backtrack=True)
+    start  = int(onsets[0]) if len(onsets) > 0 else 0
+    y_trimmed = y[start:]
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    sf.write(tmp.name, y_trimmed, sr)
+    return AudioSegment.from_file(tmp.name)
+
+
 def mix_selected(top1_paths: dict, use_drums: bool, use_bass: bool,
                  use_piano: bool, use_guitar: bool) -> str:
-    """Mix only the checked categories."""
+    """Mix only the checked categories, onset-aligned."""
     flags = {"drums": use_drums, "bass": use_bass,
              "piano": use_piano, "guitar": use_guitar}
     paths = [top1_paths[cat] for cat in CATEGORIES
@@ -84,7 +97,8 @@ def mix_selected(top1_paths: dict, use_drums: bool, use_bass: bool,
     if not paths:
         return None
     try:
-        segments = [AudioSegment.from_file(p) for p in paths]
+        # Trim each stem to its first onset so downbeats align
+        segments = [trim_to_first_onset(p) for p in paths]
         min_len  = min(len(s) for s in segments)
         mixed    = segments[0][:min_len]
         for s in segments[1:]:
