@@ -16,7 +16,7 @@ import gradio as gr
 from pydub import AudioSegment
 
 from data.features import midi_to_chroma
-from models.dual_encoder import DualEncoder, CATEGORIES
+from models.dual_encoder_mlp import DualEncoder, CATEGORIES
 
 CAT_EMOJI = {"drums": "🥁", "bass": "🎸", "piano": "🎹", "guitar": "🎛"}
 CAT_LABEL = {"drums": "Drums", "bass": "Bass",
