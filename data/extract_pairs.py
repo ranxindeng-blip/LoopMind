@@ -68,8 +68,8 @@ def get_bpm(midi_path: str) -> float:
     """Return the first tempo (BPM) found in a MIDI file, default 120."""
     try:
         pm = pretty_midi.PrettyMIDI(midi_path)
-        tempos, _ = pm.get_tempo_changes()
-        return float(tempos[0]) if len(tempos) > 0 else 120.0
+        _, tempi = pm.get_tempo_changes()   # returns (times, tempi_in_bpm)
+        return float(tempi[0]) if len(tempi) > 0 else 120.0
     except Exception:
         return 120.0
 
