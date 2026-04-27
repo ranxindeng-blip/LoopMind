@@ -188,3 +188,98 @@ We evaluate using **Recall@K (R@K)**:
 | 4 independent AudioEncoders | Drums, bass, piano, guitar have fundamentally different spectral characteristics |
 | Self-supervised labels | No annotation cost; dataset structure provides natural positive pairs |
 | Subset of 400 tracks | Balances training time and Drive storage constraints for this prototype |
+
+---
+
+## 11. Current Limitations
+
+The prototype works end-to-end but has three practical bottlenecks:
+
+1. **Small library (400 tracks).** Retrieval quality is bounded by library coverage — if no stylistically compatible stem exists, even a perfect model returns the least-bad match.
+2. **No tonal alignment in the mix.** BPM is roughly matched, but stems in the wrong key are mixed together, which causes audible dissonance.
+3. **AudioEncoder trained from scratch.** With only 400 tracks, the mel-spectrogram CNN+Transformer has not seen enough audio variety to build robust timbral representations.
+
+---
+
+## 12. Planned Improvements
+
+### 12.1 Full Dataset + Storage Strategy
+
+The full Slakh2100 contains ~2,100 tracks (~100 GB audio). To work around Google Drive's 50 GB limit we stream-download each session directly into the Colab runtime disk (~78 GB), extract pre-computed `.npy` feature files to Drive (~2 GB total), and never store raw audio persistently. This means training from scratch after each session reconnect, but feature extraction is skipped (cached).
+
+### 12.2 CLAP Audio Encoder (Transfer Learning)
+
+Replace the from-scratch AudioEncoder with **CLAP** (Contrastive Language-Audio Pretraining, LAION-AI), a Transformer pre-trained on millions of audio–text pairs.
+
+- The CLAP backbone is **frozen**; only a small linear projection head is trained.
+- This is the single highest-leverage improvement: the backbone has already learned rich timbral and rhythmic representations across many genres.
+- Reduces the data requirement on our side from "enough to train a good audio encoder" to "enough to align the projection head".
+
+### 12.3 LoRA Fine-Tuning
+
+We apply **Low-Rank Adaptation (LoRA)** to the Transformer encoder layers of the QueryEncoder.
+
+Rather than full fine-tuning (updating all ~1.8M query-encoder parameters), LoRA injects trainable low-rank matrices into the attention weight matrices:
+
+```
+W' = W + α · (A · B),   A ∈ R^{d×r},  B ∈ R^{r×d},  r ≪ d
+```
+
+With rank `r = 8` and `α = 16`, only ~50K additional parameters are trained (about 3% of the backbone). This regularizes fine-tuning and prevents catastrophic forgetting of any pre-learned structure, while adapting the query encoder to our specific MIDI-to-audio retrieval task.
+
+We additionally perform a **hyperparameter sweep** over temperature `τ ∈ {0.05, 0.07, 0.10}`, learning rate, and LoRA rank to select the best configuration.
+
+### 12.4 Key and BPM Alignment in the Mix
+
+When mixing retrieved stems with the query melody:
+
+- **BPM alignment**: time-stretch each stem to match the query's BPM using `librosa.effects.time_stretch`. (BPM is already stored in the library.)
+- **Key alignment**: detect the root key of the stem with `librosa.key_to_notes` / chroma-based key estimation, then pitch-shift to the query melody's key using `librosa.effects.pitch_shift`.
+
+Both operations run at inference time on the top-1 stem per category before mixing.
+
+---
+
+## 13. Generative Extension — MusicGen
+
+In parallel with retrieval, we add a **generation mode** using Meta's **MusicGen** (`audiocraft` library).
+
+### Why two modes?
+
+| | Retrieval | Generation |
+|---|---|---|
+| Source | Real recordings from Slakh library | Synthesized by a language model |
+| Style fidelity | High (actual instrument audio) | Variable |
+| Coverage | Bounded by library | Unlimited |
+| Controllability | Top-K ranked candidates | Text-prompt conditioned |
+
+### How it works
+
+```
+1. User uploads a MIDI melody
+2. MIDI → WAV  (existing midi_to_audio_file)
+3. WAV + text prompt → MusicGen (melody-conditioned mode)
+   Prompts: "acoustic drums and bass"  /  "piano chords"  /  "rhythm guitar"
+4. Three generated audio clips returned alongside (or instead of) retrieved stems
+```
+
+MusicGen's melody-conditioned mode conditions the generation on the chroma features of the input audio, preserving harmonic content while generating a new accompaniment texture. Runs in ~20 seconds per clip on a T4 GPU.
+
+---
+
+## 14. Future Directions
+
+### Near-term (feasible extensions of this project)
+
+- **MIDI-BERT / MusicTransformer for query encoding.** Piano roll is a lossless but unstructured representation. A Transformer pre-trained on MIDI token sequences (e.g., REMI encoding) would capture higher-level structure — chord progressions, phrase boundaries, cadences — that piano roll + CNN cannot easily extract. The reason we did not pursue this in the current version is that the audio encoder was the binding constraint, and CLAP addresses that more directly.
+- **Hard negative mining.** Replace random in-batch negatives with same-key, same-BPM stems from *different* tracks. These are musically confusable and force the model to learn finer semantic distinctions.
+- **4-stem generative separation.** MusicGen currently outputs a mixed accompaniment signal. A follow-up pass through a source-separation model (Demucs) could yield separate drums, bass, piano, and guitar tracks from the generated audio.
+
+### Medium-term (engineering / research track)
+
+- **DAW plugin (VST3).** Expose the retrieval and generation pipeline as a real-time plugin for Ableton Live or Logic Pro. The user hums or plays a melody; the plugin retrieves or generates accompaniment on the fly.
+- **Preference-based fine-tuning.** Collect user ratings on retrieved stems and fine-tune the model with a contrastive preference loss (similar to DPO), creating a feedback loop that personalises retrieval to individual producers.
+
+### Long-term vision
+
+> An end-to-end arrangement model: given a lead sheet (melody + chord symbols), produce a full multi-track arrangement — each instrument rendered with realistic timbre and stylistically coherent with the input. LoopMind is one building block toward this goal: it proves that cross-modal semantic alignment between symbolic music and audio is learnable with self-supervised data alone.
