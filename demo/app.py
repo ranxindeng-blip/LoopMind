@@ -15,8 +15,8 @@ import matplotlib.pyplot as plt
 import gradio as gr
 from pydub import AudioSegment
 
-from data.features import midi_to_chroma
-from models.dual_encoder_mlp import DualEncoder, CATEGORIES
+from data.features import midi_to_pianoroll
+from models.dual_encoder import DualEncoder, CATEGORIES
 
 CAT_EMOJI = {"drums": "🥁", "bass": "🎸", "piano": "🎹", "guitar": "🎛"}
 CAT_LABEL = {"drums": "Drums", "bass": "Bass",
@@ -118,8 +118,8 @@ def mix_selected(top1_paths: dict, melody_path: str,
 
 def retrieve_all(midi_path: str, model, library: dict, device) -> dict:
     try:
-        feat = midi_to_chroma(midi_path)
-        x    = torch.from_numpy(feat).unsqueeze(0).to(device)
+        feat = midi_to_pianoroll(midi_path)
+        x    = torch.from_numpy(feat).unsqueeze(0).to(device)  # [1, 256, 128]
         with torch.no_grad():
             embeddings = model.encode_query(x)
         results = {}
